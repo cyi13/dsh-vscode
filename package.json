@@ -3,7 +3,7 @@
   "displayName": "DSH Sessions",
   "description": "Show and manage DeepSeek Harness sessions for the current VS Code workspace: session list, deep links into the DSH web GUI, copy/paste bridge and session actions.",
   "version": "0.1.0",
-  "publisher": "your-publisher-id",
+  "publisher": "cyi13",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
@@ -25,12 +25,12 @@
   "icon": "assets/dsh-icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/YOUR_GITHUB_USERNAME/dsh-vscode.git"
+    "url": "https://github.com/cyi13/dsh-vscode.git"
   },
   "bugs": {
-    "url": "https://github.com/YOUR_GITHUB_USERNAME/dsh-vscode/issues"
+    "url": "https://github.com/cyi13/dsh-vscode/issues"
   },
-  "homepage": "https://github.com/YOUR_GITHUB_USERNAME/dsh-vscode",
+  "homepage": "https://github.com/cyi13/dsh-vscode",
   "activationEvents": [],
   "main": "./dist/extension.js",
   "contributes": {
