@@ -621,9 +621,13 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
 
       function applyZoom() {
         var s = Math.round(scale * 100) / 100;
-        frame.style.width = (100 / s) + '%';
-        frame.style.height = (100 / s) + '%';
-        frame.style.transform = 'scale(' + s + ')';
+        // CSS zoom is a layout-level scale (Chromium). Unlike
+        // transform: scale() it does not promote the iframe to a compositor
+        // layer, so scrolling does not go through low-quality rasterization
+        // (text stays crisp while scrolling, instead of blurry-then-sharp).
+        frame.style.width = '100%';
+        frame.style.height = '100%';
+        frame.style.zoom = String(s);
         zoomLabel.textContent = Math.round(s * 100) + '%';
       }
 

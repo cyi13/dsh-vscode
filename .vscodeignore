@@ -1,6 +1,10 @@
 # 发布到 VS Code Marketplace 时从 .vsix 中排除的文件
 # 只保留运行所需的产物（dist/、assets/、README、LICENSE、package.json）
 
+# DSH 依赖插件源码（plugins/）通过 GitHub 仓库分发，不打包进 VSIX；
+# 用户按 PLUGINS.md / install.sh 从仓库构建安装。
+plugins/
+
 node_modules/
 src/
 dist/*.map
