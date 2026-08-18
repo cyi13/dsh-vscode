@@ -109,6 +109,8 @@ type InMessage =
   | { type: "renameSession"; sessionId: string; currentTitle?: string }
   | { type: "forkSession"; sessionId: string }
   | { type: "archiveSession"; sessionId: string }
+  // Zoom diagnostics (log only).
+  | { type: "zoomChanged"; scale: number }
   // Clipboard bridge: the iframe's dsh-clipboard plugin forwards copy/paste
   // here; the host reads/writes the system clipboard with vscode.env.clipboard
   // and posts the result back into the iframe.
@@ -163,6 +165,9 @@ export class DshWebviewProvider implements vscode.WebviewViewProvider {
         break;
       case "archiveSession":
         await this.archiveSession(msg.sessionId);
+        break;
+      case "zoomChanged":
+        console.log(`[dsh] zoom changed -> ${Math.round(msg.scale * 100)}%`);
         break;
       case "clipboardWrite":
         await vscode.env.clipboard.writeText(msg.text);
@@ -690,9 +695,11 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
       });
       document.getElementById('zoomOut').addEventListener('click', function () {
         scale = Math.max(MIN, scale - STEP); applyZoom();
+        vscode.postMessage({ type: 'zoomChanged', scale: scale });
       });
       document.getElementById('zoomIn').addEventListener('click', function () {
         scale = Math.min(MAX, scale + STEP); applyZoom();
+        vscode.postMessage({ type: 'zoomChanged', scale: scale });
       });
       document.getElementById('refreshBtn').addEventListener('click', function () {
         vscode.postMessage({ type: 'refresh' });

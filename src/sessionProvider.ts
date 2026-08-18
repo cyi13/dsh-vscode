@@ -93,6 +93,7 @@ export class DshSessionsProvider implements vscode.TreeDataProvider<DshTreeItem>
   /** Fingerprint of the last rendered state; the tree is rebuilt only on change. */
   private lastSnapshot = "";
   private autoTimer: ReturnType<typeof setInterval> | undefined;
+  private _loadStartedAt = 0;
 
   constructor(baseUrl: string) {
     this.client = DshClient.fromRaw(baseUrl);
@@ -148,8 +149,22 @@ export class DshSessionsProvider implements vscode.TreeDataProvider<DshTreeItem>
 
   /** Re-run the whole load: ping, resolve workspace, fetch sessions. */
   async load(): Promise<void> {
-    if (this.refreshing) return;
+    if (this.refreshing) {
+      // Safety net: if a previous load never settled (e.g. a hung call), do
+      // not block auto-refresh forever.
+      if (Date.now() - this._loadStartedAt > 30000) {
+        this.refreshing = false;
+        console.warn("[dsh-tree] reset stuck load (refreshing stuck >30s)");
+      } else {
+        return;
+      }
+    }
     this.refreshing = true;
+    this._loadStartedAt = Date.now();
+    const t0 = this._loadStartedAt;
+    console.log(
+      `[dsh-tree] load start folder=${this.folderPath ?? "(none)"} base=${this.client.baseUrl}`,
+    );
     try {
       if (this.folderPath === undefined) {
         this.error = undefined;
@@ -212,10 +227,19 @@ export class DshSessionsProvider implements vscode.TreeDataProvider<DshTreeItem>
       this.sessions = [];
     } finally {
       this.refreshing = false;
-      // Rebuild the tree only when something actually changed (running
-      // status, titles, order, availability) so auto-refresh does not
-      // collapse or flicker the view.
-      const snap = this.fingerprint();
+      const ms = Date.now() - t0;
+      let snap: string;
+      try {
+        snap = this.fingerprint();
+      } catch (err) {
+        // fingerprint must never block the tree from refreshing.
+        snap = `fingerprint-error:${String(err)}`;
+        this._onDidChangeTreeData.fire();
+      }
+      console.log(
+        `[dsh-tree] load done ${ms}ms workspace=${this.workspace?.workspaceId ?? "(none)"} ` +
+          `sessions=${this.sessions.length} error=${this.error ?? "(none)"} fire=${snap !== this.lastSnapshot}`,
+      );
       if (snap !== this.lastSnapshot) {
         this.lastSnapshot = snap;
         this._onDidChangeTreeData.fire();
