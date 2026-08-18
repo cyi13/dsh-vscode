@@ -1,0 +1,19 @@
+# 发布到 VS Code Marketplace 时从 .vsix 中排除的文件
+# 只保留运行所需的产物（dist/、assets/、README、LICENSE、package.json）
+
+node_modules/
+src/
+dist/*.map
+.vscode/
+tsconfig.json
+tsconfig.tests.json
+esbuild.mjs
+package-lock.json
+pnpm-lock.yaml
+*.tgz
+.git/
+.gitignore
+.DS_Store
+.vscodeignore
+*.vsix
+scripts/

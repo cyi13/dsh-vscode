@@ -1,0 +1,201 @@
+{
+  "name": "dsh-sessions",
+  "displayName": "DSH Sessions",
+  "description": "Show and manage DeepSeek Harness sessions for the current VS Code workspace: session list, deep links into the DSH web GUI, copy/paste bridge and session actions.",
+  "version": "0.1.0",
+  "publisher": "your-publisher-id",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "deepseek",
+    "dsh",
+    "deepseek-harness",
+    "sessions",
+    "chat"
+  ],
+  "galleryBanner": {
+    "color": "#1e1e1e",
+    "theme": "dark"
+  },
+  "icon": "assets/dsh-icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR_GITHUB_USERNAME/dsh-vscode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/YOUR_GITHUB_USERNAME/dsh-vscode/issues"
+  },
+  "homepage": "https://github.com/YOUR_GITHUB_USERNAME/dsh-vscode",
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "dshSessions",
+          "title": "DSH Sessions",
+          "icon": "assets/dsh-icon.svg"
+        }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "dshSessionsWeb",
+          "title": "DSH",
+          "icon": "assets/dsh-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "dshSessions": [
+        {
+          "id": "dshSessionsView",
+          "name": "Sessions",
+          "contextualTitle": "DSH Sessions"
+        }
+      ],
+      "dshSessionsWeb": [
+        {
+          "id": "dshSessionsWebView",
+          "name": "DSH GUI",
+          "type": "webview",
+          "contextualTitle": "DSH"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "dshSessionsView",
+        "contents": "DeepSeek Harness is not reachable.\n\nStart it with:\n\n```\ndsh web\n```\n\n[Check connection](command:dshSessions.checkConnection)\n[Open Settings](command:workbench.action.openSettings?%5B%22dshSessions.baseUrl%22%5D)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "dshSessions.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)",
+        "category": "DSH"
+      },
+      {
+        "command": "dshSessions.checkConnection",
+        "title": "Check DSH connection",
+        "category": "DSH"
+      },
+      {
+        "command": "dshSessions.registerWorkspace",
+        "title": "Register this folder in DSH",
+        "category": "DSH"
+      },
+      {
+        "command": "dshSessions.newSession",
+        "title": "New session in this workspace",
+        "icon": "$(add)",
+        "category": "DSH"
+      },
+      {
+        "command": "dshSessions.openInVscode",
+        "title": "Open DSH GUI in VS Code",
+        "category": "DSH"
+      },
+      {
+        "command": "dshSessions.openInWeb",
+        "title": "Open DSH GUI in browser",
+        "category": "DSH"
+      },
+      {
+        "command": "dshSessions.openSession",
+        "title": "Open session in VS Code",
+        "category": "DSH"
+      },
+      {
+        "command": "dshSessions.renameSession",
+        "title": "重命名会话",
+        "category": "DSH"
+      },
+      {
+        "command": "dshSessions.forkSession",
+        "title": "分叉会话",
+        "category": "DSH"
+      },
+      {
+        "command": "dshSessions.archiveSession",
+        "title": "归档会话",
+        "category": "DSH"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "dshSessions.refresh",
+          "when": "view == dshSessionsView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dshSessions.newSession",
+          "when": "view == dshSessionsView && dshSessions.hasWorkspace",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "dshSessions.openSession",
+          "when": "view == dshSessionsView && viewItem == dshSession",
+          "group": "inline@1"
+        },
+        {
+          "command": "dshSessions.renameSession",
+          "when": "view == dshSessionsView && viewItem == dshSession",
+          "group": "2"
+        },
+        {
+          "command": "dshSessions.forkSession",
+          "when": "view == dshSessionsView && viewItem == dshSession",
+          "group": "2"
+        },
+        {
+          "command": "dshSessions.archiveSession",
+          "when": "view == dshSessionsView && viewItem == dshSession",
+          "group": "2"
+        },
+        {
+          "command": "dshSessions.openInWeb",
+          "when": "view == dshSessionsView && viewItem == dshSession",
+          "group": "3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "DSH Sessions",
+      "properties": {
+        "dshSessions.baseUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:3080",
+          "description": "Base URL of the DeepSeek Harness web server (dsh web)."
+        },
+        "dshSessions.autoRegister": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically register the current folder as a DSH workspace when it is not registered yet."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "vsce package --no-dependencies",
+    "check-types": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.24.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.4.0"
+  }
+}
