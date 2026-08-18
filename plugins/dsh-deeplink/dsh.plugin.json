@@ -1,0 +1,13 @@
+{
+  "id": "dsh-deeplink",
+  "version": "0.1.0",
+  "main": "lib/index.js",
+  "description": "Deep-link support for the DSH web GUI (?session= / ?workspace=).",
+  "engines": {
+    "dsh": ">=0.0.1"
+  },
+  "contributes": {
+    "tools": [],
+    "skills": []
+  }
+}

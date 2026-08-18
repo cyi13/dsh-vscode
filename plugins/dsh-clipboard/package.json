@@ -1,0 +1,47 @@
+{
+  "name": "dsh-clipboard",
+  "description": "Clipboard bridge for the DSH GUI when embedded in a VS Code webview iframe: copy/paste events are relayed to the embedding host, which reads/writes the system clipboard through the VS Code API.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "dsh.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": { "optional": true }
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.0",
+    "typescript": "^5.4.0"
+  }
+}

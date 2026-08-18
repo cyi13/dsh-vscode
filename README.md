@@ -14,14 +14,17 @@
 ## 依赖
 
 - 本机运行着 **DSH web**（`dsh web`，默认 `http://127.0.0.1:3080`）。
-- DSH 侧需要两个插件（否则深链和剪贴板不可用）：
+- 需要两个 DSH 插件（源码在仓库 `plugins/`，构建安装见 [PLUGINS.md](PLUGINS.md)）：
   - `dsh-deeplink`：会话深链（`?session=`）
   - `dsh-clipboard`：剪贴板桥接
 
 ```sh
-dsh plugin --profile web add <dsh-deeplink tarball>
-dsh plugin --profile web add <dsh-clipboard tarball>
+# 构建并安装（详见 PLUGINS.md）
+cd plugins/dsh-deeplink && npm install && npm run build && npm pack
+dsh plugin --profile web add ./dsh-deeplink-0.1.0.tgz
+# 同理安装 dsh-clipboard
 ```
+安装后重启 dsh web 并刷新页面。
 
 ## 安装
 

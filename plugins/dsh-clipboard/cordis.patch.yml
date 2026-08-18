@@ -1,0 +1,6 @@
+# dsh-clipboard bundle patch: mount the host plugin under its package name so
+# the client-modules scan picks up the dsh.client declaration and serves the
+# client bundle at /plugins/dsh-clipboard/client.js.
+- insert:
+    - id: dsh-clipboard
+      name: dsh-clipboard
