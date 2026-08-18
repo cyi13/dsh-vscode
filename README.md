@@ -28,6 +28,18 @@ dsh plugin --profile web add ./dsh-deeplink-0.1.0.tgz
 
 ## 安装
 
+### 一键安装（推荐）
+
+构建并安装两个 DSH 插件、重启 dsh web、安装 VS Code 扩展：
+
+```sh
+./install.sh
+```
+
+可选参数：
+- `--no-restart-web`：跳过 dsh web 重启（需手动重启）
+- `--skip-extension`：只装 DSH 插件，不装 VS Code 扩展
+
 ### VS Code Marketplace（发布后）
 
 在 Extensions 里搜索 **DSH Sessions** 安装。
