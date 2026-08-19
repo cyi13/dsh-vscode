@@ -452,10 +452,6 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
   #zoomLabel{min-width:38px;text-align:center;font-size:11px;
              color:var(--vscode-descriptionForeground,#bbb);user-select:none;}
   #frameHost{flex:1;position:relative;overflow:hidden;}
-  /* Inner wrapper: the element CSS zoom is applied to. Absolute so it is
-     not affected by the parent flex layout, and its width/height can be
-     compensated (1/s) to net back to full size under zoom:s. */
-  #frameZoom{position:absolute;top:0;left:0;transform-origin:top left;}
   #frame{position:absolute;top:0;left:0;transform-origin:top left;border:none;
          background:var(--vscode-editor-background,#1e1e1e);}
   #loading{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
@@ -504,10 +500,8 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
       <button id="reload" title="重新加载">&#8635;</button>
     </div>
     <div id="frameHost">
-      <div id="frameZoom">
-        <div id="loading"><span class="spinner"></span><span>加载中…</span></div>
-        <iframe id="frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals allow-clipboard-read allow-clipboard-write"></iframe>
-      </div>
+      <div id="loading"><span class="spinner"></span><span>加载中…</span></div>
+      <iframe id="frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals allow-clipboard-read allow-clipboard-write"></iframe>
     </div>
   </div>
   <script nonce="${nonce}">
@@ -518,8 +512,6 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
       var listLayer = document.getElementById('listLayer');
       var stage = document.getElementById('stage');
       var frame = document.getElementById('frame');
-      var frameHost = document.getElementById('frameHost');
-      var frameZoom = document.getElementById('frameZoom');
       var loading = document.getElementById('loading');
       var zoomLabel = document.getElementById('zoomLabel');
       var ctxMenu = document.getElementById('ctxmenu');
@@ -657,25 +649,20 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
         if (ctxMenu.classList.contains('on')) hideCtxMenu();
       });
 
+      // Zoom is applied INSIDE the DSH page by the dsh-clipboard plugin
+      // (it sets zoom on document.documentElement, which is the only element
+      // this engine scales via CSS zoom). The host relays the value to the
+      // iframe; nothing on the iframe element itself is scaled, so there is
+      // no compositor blur and no layout spill.
       function applyZoom() {
         var s = Math.round(scale * 100) / 100;
-        // In this webview engine, setting CSS zoom directly on the iframe is
-        // parsed (computed = 0.5) but has NO visual effect. Setting it on a
-        // wrapper element around the iframe does scale it (verified). zoom is
-        // a layout-level scale (not a compositor transform), so it does not
-        // produce the scroll-blur of transform: scale().
-        //
-        // frameZoom is absolute, inset by its own width/height. Under zoom:s
-        // its visual size becomes s * (width/height), so we set its layout
-        // size to (1/s) * 100% to net back to filling frameHost exactly.
-        frame.style.transform = 'none';
-        frame.style.zoom = '1';
-        frame.style.width = '100%';
-        frame.style.height = '100%';
-        frameZoom.style.width = (100 / s) + '%';
-        frameZoom.style.height = (100 / s) + '%';
-        frameZoom.style.zoom = String(s);
         zoomLabel.textContent = Math.round(s * 100) + '%';
+        if (frame.contentWindow) {
+          frame.contentWindow.postMessage(
+            { source: 'dsh-clipboard-host', type: 'setZoom', value: s },
+            '*'
+          );
+        }
       }
 
       function showLoading() {
@@ -716,6 +703,9 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
         // iframe, so drop the overlay quickly.
         if (loadTimer) clearTimeout(loadTimer);
         loadTimer = setTimeout(hideLoading, 350);
+        // Re-apply zoom after load so the freshly loaded DSH page (with the
+        // dsh-clipboard plugin) receives the current zoom value.
+        applyZoom();
       });
 
       // Background preload: warm the DSH GUI without showing it.
