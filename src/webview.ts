@@ -452,6 +452,10 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
   #zoomLabel{min-width:38px;text-align:center;font-size:11px;
              color:var(--vscode-descriptionForeground,#bbb);user-select:none;}
   #frameHost{flex:1;position:relative;overflow:hidden;}
+  /* Inner wrapper: the element CSS zoom is applied to. Absolute so it is
+     not affected by the parent flex layout, and its width/height can be
+     compensated (1/s) to net back to full size under zoom:s. */
+  #frameZoom{position:absolute;top:0;left:0;transform-origin:top left;}
   #frame{position:absolute;top:0;left:0;transform-origin:top left;border:none;
          background:var(--vscode-editor-background,#1e1e1e);}
   #loading{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
@@ -500,8 +504,10 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
       <button id="reload" title="重新加载">&#8635;</button>
     </div>
     <div id="frameHost">
-      <div id="loading"><span class="spinner"></span><span>加载中…</span></div>
-      <iframe id="frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals allow-clipboard-read allow-clipboard-write"></iframe>
+      <div id="frameZoom">
+        <div id="loading"><span class="spinner"></span><span>加载中…</span></div>
+        <iframe id="frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals allow-clipboard-read allow-clipboard-write"></iframe>
+      </div>
     </div>
   </div>
   <script nonce="${nonce}">
@@ -512,6 +518,8 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
       var listLayer = document.getElementById('listLayer');
       var stage = document.getElementById('stage');
       var frame = document.getElementById('frame');
+      var frameHost = document.getElementById('frameHost');
+      var frameZoom = document.getElementById('frameZoom');
       var loading = document.getElementById('loading');
       var zoomLabel = document.getElementById('zoomLabel');
       var ctxMenu = document.getElementById('ctxmenu');
@@ -520,6 +528,31 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
       var scale = 0.8;
       var MIN = 0.6, MAX = 1.4, STEP = 0.1;
       var loadTimer = null;
+      // Detect whether the engine applies CSS zoom to layout. Important:
+      // zoom scales the VISUAL size, not the layout width — offsetWidth stays
+      // at the unzoomed width, so it must NOT be used for detection. The
+      // reliable signals are getComputedStyle().zoom (the applied value) and
+      // getBoundingClientRect() (the visual, zoomed size). When zoom is
+      // unsupported (some WKWebView builds), fall back to transform: scale().
+      var ZOOM_SUPPORTED = (function () {
+        try {
+          var probe = document.createElement('div');
+          probe.style.cssText = 'position:absolute;visibility:hidden;width:100px;height:10px;zoom:0.5;';
+          document.body.appendChild(probe);
+          var applied = getComputedStyle(probe).zoom;
+          var visual = probe.getBoundingClientRect().width;
+          var offset = probe.offsetWidth;
+          document.body.removeChild(probe);
+          console.log('[dsh-panel] zoom probe: applied=' + applied + ' visual=' + visual + ' offset=' + offset);
+          // Zoom works if the computed value stayed 0.5 AND the visual width
+          // shrank to ~50 (both hold in Chromium and WebKit).
+          return applied === '0.5' && Math.abs(visual - 50) < 1;
+        } catch (e) {
+          console.log('[dsh-panel] zoom probe error:', e);
+          return false;
+        }
+      })();
+      console.log('[dsh-panel] zoom support =', ZOOM_SUPPORTED);
       // Warm the iframe in the background (not visible) so the first click
       // into a session reuses cached resources.
       var PRELOAD_URL = ${JSON.stringify(preloadUrl)};
@@ -626,13 +659,22 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
 
       function applyZoom() {
         var s = Math.round(scale * 100) / 100;
-        // CSS zoom is a layout-level scale (Chromium). Unlike
-        // transform: scale() it does not promote the iframe to a compositor
-        // layer, so scrolling does not go through low-quality rasterization
-        // (text stays crisp while scrolling, instead of blurry-then-sharp).
+        // In this webview engine, setting CSS zoom directly on the iframe is
+        // parsed (computed = 0.5) but has NO visual effect. Setting it on a
+        // wrapper element around the iframe does scale it (verified). zoom is
+        // a layout-level scale (not a compositor transform), so it does not
+        // produce the scroll-blur of transform: scale().
+        //
+        // frameZoom is absolute, inset by its own width/height. Under zoom:s
+        // its visual size becomes s * (width/height), so we set its layout
+        // size to (1/s) * 100% to net back to filling frameHost exactly.
+        frame.style.transform = 'none';
+        frame.style.zoom = '1';
         frame.style.width = '100%';
         frame.style.height = '100%';
-        frame.style.zoom = String(s);
+        frameZoom.style.width = (100 / s) + '%';
+        frameZoom.style.height = (100 / s) + '%';
+        frameZoom.style.zoom = String(s);
         zoomLabel.textContent = Math.round(s * 100) + '%';
       }
 
