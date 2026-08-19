@@ -33,7 +33,6 @@ interface HostMessage {
   type?: string;
   text?: string;
   dataUrl?: string;
-  value?: number;
 }
 
 /** Messages this plugin posts up to the embedding webview document. */
@@ -275,17 +274,6 @@ function handleHostMessage(event: MessageEvent): void {
     injectText(msg.text);
   } else if (msg.type === "injectImage" && typeof msg.dataUrl === "string") {
     injectImage(msg.dataUrl);
-  } else if (msg.type === "setZoom" && typeof msg.value === "number") {
-    // Zoom the whole GUI from inside the document. This engine applies CSS
-    // zoom only to the root element (document.documentElement) — setting it
-    // on ordinary elements has no visual effect — and root zoom is a
-    // layout-level scale (no compositor blur while scrolling).
-    const v = Math.min(1.4, Math.max(0.6, msg.value));
-    try {
-      document.documentElement.style.zoom = String(v);
-    } catch {
-      // zoom unsupported in this engine; ignore
-    }
   }
 }
 

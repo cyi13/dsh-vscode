@@ -520,31 +520,6 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
       var scale = 0.8;
       var MIN = 0.6, MAX = 1.4, STEP = 0.1;
       var loadTimer = null;
-      // Detect whether the engine applies CSS zoom to layout. Important:
-      // zoom scales the VISUAL size, not the layout width — offsetWidth stays
-      // at the unzoomed width, so it must NOT be used for detection. The
-      // reliable signals are getComputedStyle().zoom (the applied value) and
-      // getBoundingClientRect() (the visual, zoomed size). When zoom is
-      // unsupported (some WKWebView builds), fall back to transform: scale().
-      var ZOOM_SUPPORTED = (function () {
-        try {
-          var probe = document.createElement('div');
-          probe.style.cssText = 'position:absolute;visibility:hidden;width:100px;height:10px;zoom:0.5;';
-          document.body.appendChild(probe);
-          var applied = getComputedStyle(probe).zoom;
-          var visual = probe.getBoundingClientRect().width;
-          var offset = probe.offsetWidth;
-          document.body.removeChild(probe);
-          console.log('[dsh-panel] zoom probe: applied=' + applied + ' visual=' + visual + ' offset=' + offset);
-          // Zoom works if the computed value stayed 0.5 AND the visual width
-          // shrank to ~50 (both hold in Chromium and WebKit).
-          return applied === '0.5' && Math.abs(visual - 50) < 1;
-        } catch (e) {
-          console.log('[dsh-panel] zoom probe error:', e);
-          return false;
-        }
-      })();
-      console.log('[dsh-panel] zoom support =', ZOOM_SUPPORTED);
       // Warm the iframe in the background (not visible) so the first click
       // into a session reuses cached resources.
       var PRELOAD_URL = ${JSON.stringify(preloadUrl)};
@@ -649,20 +624,16 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
         if (ctxMenu.classList.contains('on')) hideCtxMenu();
       });
 
-      // Zoom is applied INSIDE the DSH page by the dsh-clipboard plugin
-      // (it sets zoom on document.documentElement, which is the only element
-      // this engine scales via CSS zoom). The host relays the value to the
-      // iframe; nothing on the iframe element itself is scaled, so there is
-      // no compositor blur and no layout spill.
+      // Zoom via transform: scale() on the iframe. This is the original,
+      // working implementation (the only one that scales in this webview);
+      // scrolling may briefly rasterize at lower quality, but zoom works and
+      // the layout never spills.
       function applyZoom() {
         var s = Math.round(scale * 100) / 100;
+        frame.style.width = (100 / s) + '%';
+        frame.style.height = (100 / s) + '%';
+        frame.style.transform = 'scale(' + s + ')';
         zoomLabel.textContent = Math.round(s * 100) + '%';
-        if (frame.contentWindow) {
-          frame.contentWindow.postMessage(
-            { source: 'dsh-clipboard-host', type: 'setZoom', value: s },
-            '*'
-          );
-        }
       }
 
       function showLoading() {
