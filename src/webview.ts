@@ -512,6 +512,7 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
       var listLayer = document.getElementById('listLayer');
       var stage = document.getElementById('stage');
       var frame = document.getElementById('frame');
+      var frameHost = document.getElementById('frameHost');
       var loading = document.getElementById('loading');
       var zoomLabel = document.getElementById('zoomLabel');
       var ctxMenu = document.getElementById('ctxmenu');
@@ -628,12 +629,37 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
       // working implementation (the only one that scales in this webview);
       // scrolling may briefly rasterize at lower quality, but zoom works and
       // the layout never spills.
+      // Zoom applied to the webview document ROOT (document.documentElement).
+      // Verified in this engine: CSS zoom on ordinary elements / the iframe
+      // parses (computed=0.5) but has NO visual effect; zoom on the ROOT
+      // element does rescale (DSH page root zoom visibly shrank content).
+      // Our own layout uses only %/flex (no vw/vh), so root zoom rescales the
+      // whole panel cleanly — list, GUI frame and the iframe's viewport all
+      // reflow at the smaller size, which means NO compositor blur while
+      // scrolling. If the engine turns out to ignore root zoom too, we
+      // automatically fall back to transform: scale() on the iframe.
       function applyZoom() {
         var s = Math.round(scale * 100) / 100;
-        frame.style.width = (100 / s) + '%';
-        frame.style.height = (100 / s) + '%';
-        frame.style.transform = 'scale(' + s + ')';
         zoomLabel.textContent = Math.round(s * 100) + '%';
+        document.documentElement.style.zoom = (s === 1 ? '' : String(s));
+        // Verify the engine really rescales, else fall back to transform.
+        requestAnimationFrame(function () {
+          var visual = frame.getBoundingClientRect().width;
+          var host = frameHost.getBoundingClientRect().width;
+          var effective = Math.abs(visual - host) < Math.max(2, host * 0.05);
+          console.log('[dsh-panel] zoom ' + Math.round(s * 100) + '% effective=' + effective + ' (frame visual=' + Math.round(visual) + ' host=' + Math.round(host) + ')');
+          if (!effective && s !== 1) {
+            document.documentElement.style.zoom = '';
+            frame.style.width = (100 / s) + '%';
+            frame.style.height = (100 / s) + '%';
+            frame.style.transform = 'scale(' + s + ')';
+            frame.style.transformOrigin = 'top left';
+          } else {
+            frame.style.transform = 'none';
+            frame.style.width = '100%';
+            frame.style.height = '100%';
+          }
+        });
       }
 
       function showLoading() {
