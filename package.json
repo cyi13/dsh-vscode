@@ -185,6 +185,27 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically register the current folder as a DSH workspace when it is not registered yet."
+        },
+        "dshSessions.zoomMode": {
+          "type": "string",
+          "enum": [
+            "transform-scale",
+            "iframe-zoom",
+            "root-zoom",
+            "body-zoom",
+            "body-transform",
+            "font-size",
+            "off"
+          ],
+          "default": "transform-scale",
+          "description": "DSH 面板缩放实现方式（实验：不同内核表现不同，逐个试）。"
+        },
+        "dshSessions.zoomScale": {
+          "type": "number",
+          "default": 0.8,
+          "minimum": 0.6,
+          "maximum": 1.4,
+          "description": "DSH 面板缩放比例。"
         }
       }
     }
