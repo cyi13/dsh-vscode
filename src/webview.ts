@@ -111,6 +111,10 @@ type InMessage =
   | { type: "archiveSession"; sessionId: string }
   // Zoom diagnostics (log only).
   | { type: "zoomChanged"; scale: number }
+  // Zoom experiment: the panel reports the picked mode so the host can
+  // persist it, and asks the host to open the mode QuickPick.
+  | { type: "zoomModeChanged"; mode: string }
+  | { type: "openZoomPicker" }
   // Clipboard bridge: the iframe's dsh-clipboard plugin forwards copy/paste
   // here; the host reads/writes the system clipboard with vscode.env.clipboard
   // and posts the result back into the iframe.
@@ -168,6 +172,13 @@ export class DshWebviewProvider implements vscode.WebviewViewProvider {
         break;
       case "zoomChanged":
         console.log(`[dsh] zoom changed -> ${Math.round(msg.scale * 100)}%`);
+        await this.persistZoomScale(msg.scale);
+        break;
+      case "zoomModeChanged":
+        await this.persistZoomMode(msg.mode);
+        break;
+      case "openZoomPicker":
+        await vscode.commands.executeCommand("dshSessions.zoomExperiment");
         break;
       case "clipboardWrite":
         await vscode.env.clipboard.writeText(msg.text);
@@ -210,6 +221,61 @@ export class DshWebviewProvider implements vscode.WebviewViewProvider {
     return vscode.workspace
       .getConfiguration("dshSessions")
       .get<boolean>("dshSessions.autoRegister", true);
+  }
+
+  /** Zoom experiment: current mode id (see ZOOM_MODES in the panel HTML). */
+  static zoomMode(): string {
+    return vscode.workspace
+      .getConfiguration("dshSessions")
+      .get<string>("zoomMode", "transform-scale");
+  }
+
+  /** Zoom experiment: last used scale factor (0.6–1.4). */
+  static zoomScale(): number {
+    const v = vscode.workspace
+      .getConfiguration("dshSessions")
+      .get<number>("zoomScale", 0.8);
+    return Math.min(1.4, Math.max(0.6, typeof v === "number" && Number.isFinite(v) ? v : 0.8));
+  }
+
+  /** Persist the picked zoom mode (global so it survives window reloads). */
+  private async persistZoomMode(mode: string): Promise<void> {
+    await vscode.workspace
+      .getConfiguration("dshSessions")
+      .update("zoomMode", mode, vscode.ConfigurationTarget.Global);
+    console.log(`[dsh] zoom mode -> ${mode}`);
+  }
+
+  /** Persist the zoom scale so it survives window reloads. */
+  private async persistZoomScale(scale: number): Promise<void> {
+    const rounded = Math.round(scale * 100) / 100;
+    if (Math.abs(rounded - DshWebviewProvider.zoomScale()) < 0.005) return;
+    await vscode.workspace
+      .getConfiguration("dshSessions")
+      .update("zoomScale", rounded, vscode.ConfigurationTarget.Global);
+  }
+
+  /**
+   * Push the current zoom config into an already-rendered panel (config
+   * change or QuickPick while the webview is alive).
+   */
+  pushZoomConfig(): void {
+    this.post({
+      type: "zoomConfig",
+      mode: DshWebviewProvider.zoomMode(),
+      scale: DshWebviewProvider.zoomScale(),
+    });
+  }
+
+  /** Current zoom experiment mode id (for the QuickPick placeholder). */
+  currentZoomMode(): string {
+    return DshWebviewProvider.zoomMode();
+  }
+
+  /** Switch the zoom experiment mode, persist it, and rescale the panel. */
+  async setZoomMode(mode: string): Promise<void> {
+    await this.persistZoomMode(mode);
+    this.pushZoomConfig();
   }
 
   /** Fetch the current workspace's session rows from the DSH API. */
@@ -388,7 +454,12 @@ export class DshWebviewProvider implements vscode.WebviewViewProvider {
     // Preload the GUI (already-open session if any, else the GUI root) in the
     // background so the first click into a session reuses warm caches.
     const preloadUrl = this.url ?? base;
-    this.view.webview.html = htmlForPanel(preloadUrl, base);
+    this.view.webview.html = htmlForPanel(
+      preloadUrl,
+      base,
+      DshWebviewProvider.zoomMode(),
+      DshWebviewProvider.zoomScale(),
+    );
   }
 }
 
@@ -399,7 +470,12 @@ function sessionTitle(s: DshSessionSummary): string {
   return `Session ${s.sessionId.slice(0, 8)}`;
 }
 
-function htmlForPanel(preloadUrl: string, baseUrl: string): string {
+function htmlForPanel(
+  preloadUrl: string,
+  baseUrl: string,
+  zoomMode: string,
+  zoomScale: number,
+): string {
   // frame-src is kept open to http(s) origins; the host only ever posts the
   // configured base URL, and the iframe src is only ever set from that base.
   const nonce = randomBytes(16).toString("base64");
@@ -452,6 +528,10 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
   #zoomLabel{min-width:38px;text-align:center;font-size:11px;
              color:var(--vscode-descriptionForeground,#bbb);user-select:none;}
   #frameHost{flex:1;position:relative;overflow:hidden;}
+  /* Wrapper used by the wrapper-zoom / wrapper-transform zoom modes. Absolute
+     so it is not affected by the parent flex layout; its width/height are
+     compensated (1/s) by JS so it nets back to full size under zoom:s. */
+  #frameZoom{position:absolute;top:0;left:0;transform-origin:top left;}
   #frame{position:absolute;top:0;left:0;transform-origin:top left;border:none;
          background:var(--vscode-editor-background,#1e1e1e);}
   #loading{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
@@ -497,11 +577,14 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
       <button id="zoomOut" title="缩小">&#8722;</button>
       <span id="zoomLabel">100%</span>
       <button id="zoomIn" title="放大">&#43;</button>
+      <button id="modeBtn" title="缩放模式实验：切换缩放的实现方式">模式</button>
       <button id="reload" title="重新加载">&#8635;</button>
     </div>
     <div id="frameHost">
-      <div id="loading"><span class="spinner"></span><span>加载中…</span></div>
-      <iframe id="frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals allow-clipboard-read allow-clipboard-write"></iframe>
+      <div id="frameZoom">
+        <div id="loading"><span class="spinner"></span><span>加载中…</span></div>
+        <iframe id="frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals allow-clipboard-read allow-clipboard-write"></iframe>
+      </div>
     </div>
   </div>
   <script nonce="${nonce}">
@@ -512,12 +595,18 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
       var listLayer = document.getElementById('listLayer');
       var stage = document.getElementById('stage');
       var frame = document.getElementById('frame');
+      var frameZoom = document.getElementById('frameZoom');
       var loading = document.getElementById('loading');
       var zoomLabel = document.getElementById('zoomLabel');
+      var modeBtn = document.getElementById('modeBtn');
       var ctxMenu = document.getElementById('ctxmenu');
       var menuSessionId = null;
       var currentUrl = '';
-      var scale = 0.8;
+      // ── zoom experiment state (seeded from persisted config at render) ──
+      var ZOOM_MODES = ['transform-scale', 'iframe-zoom', 'root-zoom', 'body-zoom', 'body-transform', 'font-size', 'off'];
+      var zoomMode = ${JSON.stringify(zoomMode)};
+      if (ZOOM_MODES.indexOf(zoomMode) === -1) zoomMode = 'transform-scale';
+      var scale = ${JSON.stringify(zoomScale)};
       var MIN = 0.6, MAX = 1.4, STEP = 0.1;
       var loadTimer = null;
       // Warm the iframe in the background (not visible) so the first click
@@ -624,18 +713,77 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
         if (ctxMenu.classList.contains('on')) hideCtxMenu();
       });
 
-      // Zoom via transform: scale() on the iframe — the only approach that
-      // actually scales in this webview engine (CSS zoom parses but never
-      // renders, on any element including the document root). Known
-      // tradeoff: composited scrolling rasterizes at lower quality, so text
-      // may look slightly soft DURING scrolling and sharpens when idle.
-      // Layout never spills: width/height compensate by 1/s.
+      // ── zoom experiment: one scale value, several application strategies ──
+      //
+      // transform-scale  (current default) transform:scale() on the iframe.
+      //   Works, but composited scrolling rasterizes at lower quality → text
+      //   looks soft WHILE scrolling and sharpens when idle.
+      // iframe-zoom      CSS zoom on the iframe element. In this engine the
+      //   property parses but never renders (kept for A/B confirmation).
+      // root-zoom        CSS zoom on document.documentElement inside the DSH
+      //   page, applied by the dsh-clipboard plugin. Layout-level scale (no
+      //   blur) but DSH's 100vw/vh elements misplace → possible black areas.
+      // body-zoom        CSS zoom on document.body inside the DSH page.
+      // body-transform   transform:scale() on document.body inside the DSH
+      //   page (width/height compensated) — same blur class as
+      //   transform-scale but applied from within.
+      // font-size        Root font-size scaling — expected no-op since DSH
+      //   hardcodes px sizes; kept to confirm.
+      // off              No zoom at all (100% reference).
+      function resetFrameStyles() {
+        frame.style.transform = '';
+        frame.style.zoom = '';
+        frame.style.width = '';
+        frame.style.height = '';
+        frameZoom.style.transform = '';
+        frameZoom.style.zoom = '';
+        frameZoom.style.width = '';
+        frameZoom.style.height = '';
+      }
+
+      function postZoomToPlugin(s) {
+        // Modes that must be applied INSIDE the DSH document go through the
+        // dsh-clipboard plugin bridge. Before its client.js is ready (page
+        // loading / plugin missing) this posts into the void; the load
+        // handler re-applies once the page is in.
+        if (frame.contentWindow) {
+          frame.contentWindow.postMessage(
+            { source: 'dsh-clipboard-host', type: 'setZoom', mode: zoomMode, value: s },
+            '*'
+          );
+        }
+      }
+
       function applyZoom() {
         var s = Math.round(scale * 100) / 100;
-        frame.style.width = (100 / s) + '%';
-        frame.style.height = (100 / s) + '%';
-        frame.style.transform = 'scale(' + s + ')';
+        resetFrameStyles();
+        switch (zoomMode) {
+          case 'transform-scale':
+            frame.style.width = (100 / s) + '%';
+            frame.style.height = (100 / s) + '%';
+            frame.style.transform = 'scale(' + s + ')';
+            break;
+          case 'iframe-zoom':
+            frame.style.zoom = String(s);
+            break;
+          case 'root-zoom':
+          case 'body-zoom':
+          case 'body-transform':
+          case 'font-size':
+            postZoomToPlugin(s);
+            break;
+          case 'off':
+            break;
+        }
         zoomLabel.textContent = Math.round(s * 100) + '%';
+        modeBtn.title = '缩放模式实验：当前 ' + zoomMode + ' @ ' + Math.round(s * 100) + '%，点击切换';
+      }
+
+      function setZoomMode(mode) {
+        if (ZOOM_MODES.indexOf(mode) === -1) return;
+        zoomMode = mode;
+        applyZoom();
+        vscode.postMessage({ type: 'zoomModeChanged', mode: zoomMode });
       }
 
       function showLoading() {
@@ -735,6 +883,12 @@ function htmlForPanel(preloadUrl: string, baseUrl: string): string {
         // From the extension host.
         if (msg.type === 'init' && msg.data) render(msg.data);
         else if (msg.type === 'navigate' && msg.url) goGui(msg.url);
+        else if (msg.type === 'zoomConfig' && msg.mode) {
+          // Zoom mode changed via the QuickPick: rescale with the new mode.
+          if (typeof msg.scale === 'number') scale = msg.scale;
+          zoomMode = msg.mode;
+          applyZoom();
+        }
         else if (msg.type === 'clipboardInject' && typeof msg.text === 'string') {
           console.log('[dsh-panel] host -> iframe inject', msg.text.length + ' chars');
           if (frame.contentWindow) {

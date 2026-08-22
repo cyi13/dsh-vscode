@@ -125,6 +125,11 @@
         "command": "dshSessions.archiveSession",
         "title": "归档会话",
         "category": "DSH"
+      },
+      {
+        "command": "dshSessions.zoomExperiment",
+        "title": "选择缩放模式（实验）",
+        "category": "DSH"
       }
     ],
     "menus": {

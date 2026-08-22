@@ -33,6 +33,8 @@ interface HostMessage {
   type?: string;
   text?: string;
   dataUrl?: string;
+  mode?: string;
+  value?: number;
 }
 
 /** Messages this plugin posts up to the embedding webview document. */
@@ -266,6 +268,53 @@ function cutSelectedText(): void {
   }
 }
 
+/**
+ * Apply one experimental zoom mode inside the DSH page (root/body zoom or
+ * transform, root font-size). Modes that the engine ignores are harmless —
+ * the properties simply have no effect.
+ */
+function applyZoomMode(mode: string, value: number): void {
+  const root = document.documentElement;
+  const body = document.body;
+  // Clear every mode's traces first so switching is clean.
+  root.style.zoom = "";
+  root.style.transform = "";
+  root.style.transformOrigin = "";
+  root.style.width = "";
+  root.style.height = "";
+  body.style.zoom = "";
+  body.style.transform = "";
+  body.style.transformOrigin = "";
+  body.style.width = "";
+  body.style.height = "";
+  if (mode === "off" || !(value > 0)) return;
+
+  const inv = (100 / value).toFixed(4) + "%";
+  switch (mode) {
+    case "root-zoom":
+      root.style.zoom = String(value);
+      break;
+    case "body-zoom":
+      body.style.zoom = String(value);
+      body.style.width = inv;
+      body.style.minHeight = inv;
+      break;
+    case "body-transform":
+      body.style.transform = "scale(" + value + ")";
+      body.style.transformOrigin = "top left";
+      body.style.width = inv;
+      body.style.minHeight = inv;
+      break;
+    case "font-size":
+      // DSH hardcodes px sizes; this likely has no effect but is kept for
+      // completeness of the experiment.
+      root.style.fontSize = (16 * value).toFixed(2) + "px";
+      break;
+    default:
+      break;
+  }
+}
+
 function handleHostMessage(event: MessageEvent): void {
   const msg = event.data as HostMessage | null;
   if (msg === null || typeof msg !== "object") return;
@@ -274,6 +323,10 @@ function handleHostMessage(event: MessageEvent): void {
     injectText(msg.text);
   } else if (msg.type === "injectImage" && typeof msg.dataUrl === "string") {
     injectImage(msg.dataUrl);
+  } else if (msg.type === "setZoom") {
+    const mode = typeof msg.mode === "string" ? msg.mode : "";
+    const value = typeof msg.value === "number" ? msg.value : 1;
+    applyZoomMode(mode, value);
   }
 }
 
