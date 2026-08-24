@@ -5,7 +5,7 @@ import { DshWebviewProvider } from "./webview";
 
 const VIEW_ID = "dshSessionsView";
 const CFG_SECTION = "dshSessions";
-const CFG_BASE_URL = "dshSessions.baseUrl";
+const CFG_BASE_URL = "baseUrl";
 
 let provider: DshSessionsProvider | undefined;
 let webviewProvider: DshWebviewProvider | undefined;
@@ -68,7 +68,7 @@ async function newSession(): Promise<void> {
     const res = await client.createSession(ws.workspaceId);
     provider?.refresh();
     void vscode.window.showInformationMessage(`Created session ${res.sessionId}`);
-    await webviewProvider?.open(guiUrl());
+    await webviewProvider?.openSession(res.sessionId);
   } catch (err) {
     void vscode.window.showErrorMessage(`Failed to create session: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -151,29 +151,6 @@ export function activate(extContext: vscode.ExtensionContext): void {
     }
   });
 
-  // Zoom experiment: pick one of the candidate zoom implementations. Each
-  // mode applies a different CSS technique (some inside the DSH page via the
-  // dsh-clipboard plugin, some on this webview's own DOM), because no single
-  // approach renders correctly in every webview engine.
-  vscode.commands.registerCommand("dshSessions.zoomExperiment", async () => {
-    const modes = [
-      { label: "transform-scale", description: "iframe transform scale（能缩放，滚动略模糊）" },
-      { label: "iframe-zoom", description: "iframe 元素 CSS zoom（本内核可能无效）" },
-      { label: "root-zoom", description: "DSH 页面根元素 zoom（可能布局错位）" },
-      { label: "body-zoom", description: "DSH body zoom + 尺寸补偿" },
-      { label: "body-transform", description: "DSH body transform scale" },
-      { label: "font-size", description: "根字号缩放（DSH 用 px，可能无效）" },
-      { label: "off", description: "关闭缩放（100% 原生清晰）" },
-    ];
-    const current = webviewProvider?.currentZoomMode() ?? "transform-scale";
-    const pick = await vscode.window.showQuickPick(modes, {
-      placeHolder: `选择 DSH 面板缩放模式（当前：${current}）——实验用，找到可用的后告诉我`,
-    });
-    if (!pick) return;
-    await webviewProvider?.setZoomMode(pick.label);
-    void vscode.window.showInformationMessage(`DSH 缩放模式：${pick.label}（重载窗口后仍保持）`);
-  });
-
   // Keep the "New session" menu item in sync with registration state.
   const syncContext = (): void => {
     void vscode.commands.executeCommand(
@@ -186,7 +163,7 @@ export function activate(extContext: vscode.ExtensionContext): void {
   syncContext();
 
   vscode.workspace.onDidChangeConfiguration((e) => {
-    if (e.affectsConfiguration(CFG_BASE_URL)) provider?.setBaseUrl(baseUrl());
+    if (e.affectsConfiguration(`${CFG_SECTION}.${CFG_BASE_URL}`)) provider?.setBaseUrl(baseUrl());
     if (e.affectsConfiguration("dshSessions.autoRegister")) provider?.refresh();
   });
 

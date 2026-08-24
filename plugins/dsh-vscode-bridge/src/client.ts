@@ -1,5 +1,5 @@
 /**
- * dsh-clipboard client plugin: bridge copy/paste to the embedding host.
+ * dsh-vscode-bridge client plugin: clear zoom and clipboard relay.
  *
  * VS Code webviews deny clipboard access to cross-origin iframes (even with
  * sandbox/allow attributes — microsoft/vscode#182642), and two keyboard
@@ -33,17 +33,24 @@ interface HostMessage {
   type?: string;
   text?: string;
   dataUrl?: string;
-  mode?: string;
-  value?: number;
+  scale?: number;
+  requestId?: number;
 }
 
 /** Messages this plugin posts up to the embedding webview document. */
 type BridgeMessage =
-  | { source: "dsh-clipboard"; type: "write"; text: string }
-  | { source: "dsh-clipboard"; type: "read" };
+  | { source: "dsh-vscode-bridge"; type: "ready" }
+  | { source: "dsh-vscode-bridge"; type: "write"; text: string }
+  | { source: "dsh-vscode-bridge"; type: "read" }
+  | {
+      source: "dsh-vscode-bridge";
+      type: "clearZoomApplied";
+      scale: number;
+      requestId: number;
+    };
 
-const BRIDGE_SOURCE = "dsh-clipboard";
-const HOST_SOURCE = "dsh-clipboard-host";
+const BRIDGE_SOURCE = "dsh-vscode-bridge";
+const HOST_SOURCE = "dsh-vscode-bridge-host";
 // A single copy/paste gesture can reach several event paths (keydown, DOM
 // copy/paste, VS Code's synthesized events). 800ms comfortably covers them
 // without merging separate deliberate actions.
@@ -268,51 +275,37 @@ function cutSelectedText(): void {
   }
 }
 
-/**
- * Apply one experimental zoom mode inside the DSH page (root/body zoom or
- * transform, root font-size). Modes that the engine ignores are harmless —
- * the properties simply have no effect.
- */
-function applyZoomMode(mode: string, value: number): void {
-  const root = document.documentElement;
-  const body = document.body;
-  // Clear every mode's traces first so switching is clean.
-  root.style.zoom = "";
-  root.style.transform = "";
-  root.style.transformOrigin = "";
-  root.style.width = "";
-  root.style.height = "";
-  body.style.zoom = "";
-  body.style.transform = "";
-  body.style.transformOrigin = "";
-  body.style.width = "";
-  body.style.height = "";
-  if (mode === "off" || !(value > 0)) return;
+function hideDocumentScrollbar(): void {
+  if (document.getElementById("dsh-vscode-document-scrollbar") !== null) return;
+  const style = document.createElement("style");
+  style.id = "dsh-vscode-document-scrollbar";
+  style.textContent = [
+    "html{scrollbar-width:none}",
+    "html::-webkit-scrollbar,body::-webkit-scrollbar{width:0!important;height:0!important;display:none!important}",
+  ].join("");
+  document.head.append(style);
+}
 
-  const inv = (100 / value).toFixed(4) + "%";
-  switch (mode) {
-    case "root-zoom":
-      root.style.zoom = String(value);
-      break;
-    case "body-zoom":
-      body.style.zoom = String(value);
-      body.style.width = inv;
-      body.style.minHeight = inv;
-      break;
-    case "body-transform":
-      body.style.transform = "scale(" + value + ")";
-      body.style.transformOrigin = "top left";
-      body.style.width = inv;
-      body.style.minHeight = inv;
-      break;
-    case "font-size":
-      // DSH hardcodes px sizes; this likely has no effect but is kept for
-      // completeness of the experiment.
-      root.style.fontSize = (16 * value).toFixed(2) + "px";
-      break;
-    default:
-      break;
-  }
+function applyClearZoom(scale: number, requestId: number): void {
+  if (!Number.isFinite(scale) || scale < 0.5 || scale > 2) return;
+  const root = document.getElementById("root");
+  if (root === null) return;
+
+  // Keep the iframe at the real panel size. CSS zoom handles horizontal
+  // layout; compensate #root vertically so the composer reaches the bottom.
+  // The document remains scrollable (never clipped), but its scrollbar chrome
+  // is hidden so only DSH's conversation scrollbar is visible.
+  const inversePercent = `${(100 / scale).toFixed(4)}%`;
+  hideDocumentScrollbar();
+  root.style.setProperty("zoom", String(scale));
+  root.style.width = "100%";
+  root.style.height = inversePercent;
+  postToHost({
+    source: BRIDGE_SOURCE,
+    type: "clearZoomApplied",
+    scale,
+    requestId,
+  });
 }
 
 function handleHostMessage(event: MessageEvent): void {
@@ -323,10 +316,12 @@ function handleHostMessage(event: MessageEvent): void {
     injectText(msg.text);
   } else if (msg.type === "injectImage" && typeof msg.dataUrl === "string") {
     injectImage(msg.dataUrl);
-  } else if (msg.type === "setZoom") {
-    const mode = typeof msg.mode === "string" ? msg.mode : "";
-    const value = typeof msg.value === "number" ? msg.value : 1;
-    applyZoomMode(mode, value);
+  } else if (
+    msg.type === "setClearZoom" &&
+    typeof msg.scale === "number" &&
+    typeof msg.requestId === "number"
+  ) {
+    applyClearZoom(msg.scale, msg.requestId);
   }
 }
 
@@ -349,7 +344,7 @@ function injectImage(dataUrl: string): void {
       new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }),
     );
   } catch (error) {
-    console.error("[dsh-clipboard] injectImage failed:", error);
+    console.error("[dsh-vscode-bridge] injectImage failed:", error);
   }
 }
 
@@ -387,4 +382,5 @@ export function apply(ctx: unknown): void {
   document.addEventListener("cut", handleCopyCut, true);
   document.addEventListener("paste", handlePaste, true);
   window.addEventListener("message", handleHostMessage);
+  postToHost({ source: BRIDGE_SOURCE, type: "ready" });
 }

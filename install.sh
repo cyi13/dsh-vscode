@@ -2,7 +2,7 @@
 #
 # dsh-vscode 一键安装脚本
 #
-# 作用：构建并安装两个 DSH 插件（deeplink / clipboard）到 dsh web profile，
+# 作用：构建并安装两个 DSH 插件（deeplink / vscode-bridge）到 dsh web profile，
 #       重启 dsh web，然后构建并安装 VS Code 扩展。
 #
 # 用法：
@@ -62,7 +62,7 @@ install_dsh_plugin() {
 }
 
 install_dsh_plugin dsh-deeplink
-install_dsh_plugin dsh-clipboard
+install_dsh_plugin dsh-vscode-bridge
 
 # ── 3. 重启 dsh web ──────────────────────────────────────────────────────────
 restart_dsh_web() {

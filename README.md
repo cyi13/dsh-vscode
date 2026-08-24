@@ -16,13 +16,13 @@
 - 本机运行着 **DSH web**（`dsh web`，默认 `http://127.0.0.1:3080`）。
 - 需要两个 DSH 插件（源码在仓库 `plugins/`，构建安装见 [PLUGINS.md](PLUGINS.md)）：
   - `dsh-deeplink`：会话深链（`?session=`）
-  - `dsh-clipboard`：剪贴板桥接
+  - `dsh-vscode-bridge`：页面内清晰缩放 + 剪贴板桥接
 
 ```sh
 # 构建并安装（详见 PLUGINS.md）
 cd plugins/dsh-deeplink && npm install && npm run build && npm pack
 dsh plugin --profile web add ./dsh-deeplink-0.1.0.tgz
-# 同理安装 dsh-clipboard
+# 同理安装 dsh-vscode-bridge
 ```
 安装后重启 dsh web 并刷新页面。
 

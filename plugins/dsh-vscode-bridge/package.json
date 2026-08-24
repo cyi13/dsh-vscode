@@ -1,6 +1,6 @@
 {
-  "name": "dsh-clipboard",
-  "description": "Clipboard bridge for the DSH GUI when embedded in a VS Code webview iframe: copy/paste events are relayed to the embedding host, which reads/writes the system clipboard through the VS Code API.",
+  "name": "dsh-vscode-bridge",
+  "description": "VS Code bridge for the embedded DSH GUI: crisp in-page zoom plus clipboard relay.",
   "version": "0.1.0",
   "license": "MIT",
   "type": "module",

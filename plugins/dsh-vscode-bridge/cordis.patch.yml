@@ -1,0 +1,5 @@
+# Mount the uniquely named VS Code bridge so client-modules serves its browser
+# bundle without colliding with the unrelated dsh-clipboard tool package.
+- insert:
+    - id: dsh-vscode-bridge
+      name: dsh-vscode-bridge

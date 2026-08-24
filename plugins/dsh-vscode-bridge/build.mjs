@@ -1,5 +1,5 @@
 /**
- * Single-file host + client build for dsh-clipboard.
+ * Single-file host + client build for dsh-vscode-bridge.
  */
 import { build } from 'esbuild'
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -30,7 +30,7 @@ await build({
   sourcemap: true,
   external: dshExternal,
   banner: {
-    js: "window.__ModuleLoader__.load({ id: 'dsh-clipboard', factory: (require) => { var module = { exports: {} }; var exports = module.exports;",
+    js: "window.__ModuleLoader__.load({ id: 'dsh-vscode-bridge', factory: (require) => { var module = { exports: {} }; var exports = module.exports;",
   },
   footer: {
     js: 'return module.exports; } });',
@@ -38,6 +38,6 @@ await build({
   logLevel: 'info',
 })
 
-writeFileSync('lib/index.d.ts', 'export declare const name = "dsh-clipboard";\nexport declare function apply(ctx: unknown): void;\n')
+writeFileSync('lib/index.d.ts', 'export declare const name = "dsh-vscode-bridge";\nexport declare function apply(ctx: unknown): void;\n')
 writeFileSync('lib/client.d.ts', 'export declare function apply(ctx: unknown): void;\n')
-console.log('[dsh-clipboard] build done')
+console.log('[dsh-vscode-bridge] build done')

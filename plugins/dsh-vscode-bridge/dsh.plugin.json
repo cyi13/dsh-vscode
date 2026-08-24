@@ -1,8 +1,8 @@
 {
-  "id": "dsh-clipboard",
+  "id": "dsh-vscode-bridge",
   "version": "0.1.0",
   "main": "lib/index.js",
-  "description": "Clipboard bridge for the DSH GUI embedded in a VS Code webview.",
+  "description": "Clear zoom and clipboard bridge for the DSH GUI embedded in VS Code.",
   "engines": {
     "dsh": ">=0.0.1"
   },
