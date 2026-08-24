@@ -275,37 +275,50 @@ function cutSelectedText(): void {
   }
 }
 
-function hideDocumentScrollbar(): void {
-  if (document.getElementById("dsh-vscode-document-scrollbar") !== null) return;
-  const style = document.createElement("style");
-  style.id = "dsh-vscode-document-scrollbar";
-  style.textContent = [
-    "html{scrollbar-width:none}",
-    "html::-webkit-scrollbar,body::-webkit-scrollbar{width:0!important;height:0!important;display:none!important}",
-  ].join("");
-  document.head.append(style);
+let clearZoomState: { scale: number; requestId: number } | undefined;
+let clearZoomObserver: MutationObserver | undefined;
+
+function mountClearZoom(): void {
+  const state = clearZoomState;
+  const root = document.getElementById("root");
+  const surface = root?.firstElementChild;
+  if (state === undefined || root === null || !(surface instanceof HTMLElement)) return;
+
+  // #root remains the exact iframe viewport and clips only its zoomed child.
+  // This prevents document-level scrolling. The child receives inverse layout
+  // dimensions, so after CSS zoom its visual box still fills the viewport and
+  // DSH's own fixed sidebar/composer + conversation scroller keep working.
+  const inversePercent = `${(100 / state.scale).toFixed(4)}%`;
+  document.documentElement.style.overflow = "hidden";
+  document.body.style.overflow = "hidden";
+  root.style.position = "relative";
+  root.style.top = "";
+  root.style.left = "";
+  root.style.removeProperty("zoom");
+  root.style.width = "100%";
+  root.style.height = "100%";
+  root.style.overflow = "hidden";
+  surface.style.setProperty("zoom", String(state.scale));
+  surface.style.width = inversePercent;
+  surface.style.height = inversePercent;
+
+  postToHost({
+    source: BRIDGE_SOURCE,
+    type: "clearZoomApplied",
+    scale: state.scale,
+    requestId: state.requestId,
+  });
 }
 
 function applyClearZoom(scale: number, requestId: number): void {
   if (!Number.isFinite(scale) || scale < 0.5 || scale > 2) return;
+  clearZoomState = { scale, requestId };
   const root = document.getElementById("root");
-  if (root === null) return;
-
-  // Keep the iframe at the real panel size. CSS zoom handles horizontal
-  // layout; compensate #root vertically so the composer reaches the bottom.
-  // The document remains scrollable (never clipped), but its scrollbar chrome
-  // is hidden so only DSH's conversation scrollbar is visible.
-  const inversePercent = `${(100 / scale).toFixed(4)}%`;
-  hideDocumentScrollbar();
-  root.style.setProperty("zoom", String(scale));
-  root.style.width = "100%";
-  root.style.height = inversePercent;
-  postToHost({
-    source: BRIDGE_SOURCE,
-    type: "clearZoomApplied",
-    scale,
-    requestId,
-  });
+  if (root !== null && clearZoomObserver === undefined) {
+    clearZoomObserver = new MutationObserver(mountClearZoom);
+    clearZoomObserver.observe(root, { childList: true });
+  }
+  mountClearZoom();
 }
 
 function handleHostMessage(event: MessageEvent): void {
