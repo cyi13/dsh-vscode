@@ -3,7 +3,7 @@
 # dsh-vscode 一键安装脚本
 #
 # 作用：构建并安装两个 DSH 插件（deeplink / vscode-bridge）到 dsh web profile，
-#       重启 dsh web，然后构建并安装 VS Code 扩展。
+#       应用仅 loopback 生效的认证补丁，重启 dsh web，然后构建并安装 VS Code 扩展。
 #
 # 用法：
 #   ./install.sh                  # 全部安装（含重启 dsh web）
@@ -63,6 +63,11 @@ install_dsh_plugin() {
 
 install_dsh_plugin dsh-deeplink
 install_dsh_plugin dsh-vscode-bridge
+
+# 本机 loopback-only 认证绕过由 dsh-vscode-bridge 插件在运行时完成（内存
+# 替换 connection 认证方法），不再需要修改 DSH 安装文件；DSH 更新后只要
+# 插件仍在 profile 中即自动生效。若需旧式文件补丁可执行：
+#   npm run patch-dsh-local-auth
 
 # ── 3. 重启 dsh web ──────────────────────────────────────────────────────────
 restart_dsh_web() {

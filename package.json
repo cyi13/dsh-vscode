@@ -86,6 +86,11 @@
         "category": "DSH"
       },
       {
+        "command": "dshSessions.configureUrl",
+        "title": "配置 DSH 认证 URL",
+        "category": "DSH"
+      },
+      {
         "command": "dshSessions.registerWorkspace",
         "title": "Register this folder in DSH",
         "category": "DSH"
@@ -98,7 +103,12 @@
       },
       {
         "command": "dshSessions.openInVscode",
-        "title": "Open DSH GUI in VS Code",
+        "title": "打开 DSH",
+        "shortTitle": "DSH",
+        "icon": {
+          "light": "assets/dsh-icon-toolbar-light.svg",
+          "dark": "assets/dsh-icon-toolbar-dark.svg"
+        },
         "category": "DSH"
       },
       {
@@ -128,6 +138,12 @@
       }
     ],
     "menus": {
+      "editor/title": [
+        {
+          "command": "dshSessions.openInVscode",
+          "group": "navigation@90"
+        }
+      ],
       "view/title": [
         {
           "command": "dshSessions.refresh",
@@ -174,7 +190,7 @@
         "dshSessions.baseUrl": {
           "type": "string",
           "default": "http://127.0.0.1:3080",
-          "description": "Base URL of the DeepSeek Harness web server (dsh web)."
+          "description": "DSH web URL. When authentication is required, paste the complete URL printed by `dsh web` (including `?token=...`)."
         },
         "dshSessions.autoRegister": {
           "type": "boolean",
@@ -196,7 +212,8 @@
     "compile": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "package": "vsce package --no-dependencies",
-    "check-types": "tsc -p tsconfig.json --noEmit"
+    "check-types": "tsc -p tsconfig.json --noEmit",
+    "patch-dsh-local-auth": "node scripts/patch-dsh-local-auth.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

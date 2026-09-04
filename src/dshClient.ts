@@ -3,11 +3,10 @@ import { randomUUID } from "node:crypto";
 /**
  * Minimal DeepSeek Harness web API client.
  *
- * The dsh web server exposes a JSON-RPC-like bridge at /api/<method>.
- * Wire format (verified against dsh 0.1.0-rc.6):
- *   POST /api/workspace.list
- *   {"type":"client-request","rpcId":"<uuid>","method":"workspace.list","payload":{}}
- *   -> {"type":"server-response","rpcId":"...","result":{"ok":true,"value":{...}}}
+ * DSH 0.1.2 exposes Typert Remote calls at /api/<namespace>/<method> and
+ * wraps named arguments in payload.args. Workspace listing is a streaming-only
+ * core API, so dsh-vscode-bridge supplies a one-shot compatibility endpoint at
+ * /dsh-vscode/workspace.list.
  */
 
 export interface DshWorkspace {
@@ -62,17 +61,46 @@ export class DshApiError extends Error {
 }
 
 export class DshClient {
-  constructor(public baseUrl: string) {}
+  private static readonly authCookies = new Map<string, string>();
 
-  /** Normalize a base URL: strip trailing slash, keep http(s). */
-  private static normalizeBaseUrl(raw: string): string {
-    let url = raw.trim();
-    if (!/^https?:\/\//i.test(url)) url = `http://${url}`;
-    return url.replace(/\/+$/, "");
+  private constructor(
+    public baseUrl: string,
+    private readonly authenticationUrl?: string,
+  ) {}
+
+  /** Normalize the configured URL and retain a launch-token URL when present. */
+  private static normalizeBaseUrl(raw: string): {
+    baseUrl: string;
+    authenticationUrl?: string;
+  } {
+    let value = raw.trim();
+    if (!/^https?:\/\//i.test(value)) value = `http://${value}`;
+    const parsed = new URL(value);
+    const authenticationUrl = parsed.searchParams.has("token") ? parsed.href : undefined;
+    parsed.search = "";
+    parsed.hash = "";
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+    return { baseUrl: parsed.href.replace(/\/+$/, ""), authenticationUrl };
   }
 
   static fromRaw(raw: string): DshClient {
-    return new DshClient(DshClient.normalizeBaseUrl(raw));
+    const normalized = DshClient.normalizeBaseUrl(raw);
+    return new DshClient(normalized.baseUrl, normalized.authenticationUrl);
+  }
+
+  private async requestCookie(): Promise<string | undefined> {
+    const existing = DshClient.authCookies.get(this.baseUrl);
+    if (existing !== undefined) return existing;
+    if (this.authenticationUrl === undefined) return undefined;
+    const response = await fetch(this.authenticationUrl, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(2000),
+    });
+    const setCookie = response.headers.get("set-cookie");
+    if (response.status !== 303 || setCookie === null) return undefined;
+    const cookie = setCookie.split(";", 1)[0];
+    DshClient.authCookies.set(this.baseUrl, cookie);
+    return cookie;
   }
 
   /**
@@ -81,7 +109,11 @@ export class DshClient {
    */
   async ping(): Promise<boolean> {
     try {
-      const res = await fetch(this.baseUrl + "/", { signal: AbortSignal.timeout(2000) });
+      const cookie = await this.requestCookie();
+      const res = await fetch(this.baseUrl + "/", {
+        headers: cookie === undefined ? undefined : { cookie },
+        signal: AbortSignal.timeout(2000),
+      });
       return res.ok;
     } catch {
       return false;
@@ -89,17 +121,31 @@ export class DshClient {
   }
 
   private async call<T>(method: string, payload: unknown, signal?: AbortSignal): Promise<T> {
+    const compatibilityCall = method === "workspace.list";
+    const wireMethod = compatibilityCall ? method : method.replace(".", "/");
+    const wirePayload = compatibilityCall
+      ? payload
+      : {
+          args: {
+            [method === "session.list" ? "_request" : "request"]: payload,
+          },
+        };
+    const channel = compatibilityCall ? "dsh-vscode" : "api";
     const message = {
       type: "client-request",
       rpcId: randomUUID(),
-      method,
-      payload,
+      method: wireMethod,
+      payload: wirePayload,
     };
     let res: Response;
     try {
-      res = await fetch(`${this.baseUrl}/api/${method}`, {
+      const cookie = await this.requestCookie();
+      res = await fetch(`${this.baseUrl}/${channel}/${wireMethod}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(cookie === undefined ? {} : { cookie }),
+        },
         body: JSON.stringify(message),
         signal: signal ?? AbortSignal.timeout(5000),
       });

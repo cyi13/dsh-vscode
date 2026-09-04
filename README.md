@@ -72,6 +72,19 @@ npm run compile     # 构建到 dist/
 code .              # F5 启动 Extension Development Host 调试
 ```
 
+## 本机 iframe 认证
+
+新版 DSH 的 `SameSite=Strict` browser cookie 无法在 VS Code 的跨站 iframe
+中使用（iframe 导航不会携带该 cookie，页面持续 401）。`dsh-vscode-bridge`
+插件在**运行时**包装 Connection 的认证方法：Host 为 loopback
+（`127.0.0.1` / `localhost` / `::1`）的请求直接放行，LAN/公网请求仍走 DSH
+原有认证，Host/Origin trust fence 保留。全程不修改任何 DSH 安装文件，因此
+DSH 更新后不会失效（插件位于 profile，随 `install.sh` 一并重装即恢复）。
+
+旧版基于修改安装文件的补丁仍保留为 `scripts/patch-dsh-local-auth.mjs`
+（`npm run patch-dsh-local-auth`），仅作向后兼容备选。不要在 LAN 或公网
+绑定场景使用该机制。
+
 ## 限制
 
 - 图片粘贴依赖 macOS 系统剪贴板（osascript），仅 macOS 可用。

@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { DshClient, DshSessionSummary } from "./dshClient";
+import { dshWorkspaceRoot } from "./dshFolder";
 import { DshSessionsProvider, SessionItem, StatusItem } from "./sessionProvider";
 import { DshWebviewProvider } from "./webview";
 
@@ -20,7 +21,36 @@ function openInBrowser(url: string): void {
 }
 
 function guiUrl(): string {
-  return baseUrl().replace(/\/+$/, "");
+  let raw = baseUrl().trim();
+  if (!/^https?:\/\//i.test(raw)) raw = `http://${raw}`;
+  const url = new URL(raw);
+  url.search = "";
+  url.hash = "";
+  url.pathname = "/";
+  return url.href;
+}
+
+async function configureDshUrl(): Promise<void> {
+  const value = await vscode.window.showInputBox({
+    title: "配置 DSH 认证 URL",
+    prompt: "粘贴 dsh web 启动时打印的完整 URL（包括 ?token=...）",
+    value: baseUrl(),
+    ignoreFocusOut: true,
+    validateInput: (input) => {
+      try {
+        const url = new URL(/^https?:\/\//i.test(input.trim()) ? input.trim() : `http://${input.trim()}`);
+        if (url.protocol !== "http:" && url.protocol !== "https:") return "只支持 http 或 https URL";
+        return undefined;
+      } catch {
+        return "请输入有效的 DSH URL";
+      }
+    },
+  });
+  if (value === undefined) return;
+  await vscode.workspace
+    .getConfiguration(CFG_SECTION)
+    .update(CFG_BASE_URL, value.trim(), vscode.ConfigurationTarget.Global);
+  void vscode.window.showInformationMessage("DSH URL 已更新，正在重新加载右侧面板。");
 }
 
 async function clientForAction(): Promise<DshClient | undefined> {
@@ -35,20 +65,22 @@ async function clientForAction(): Promise<DshClient | undefined> {
 }
 
 async function registerCurrentWorkspace(): Promise<void> {
-  const folder = vscode.workspace.workspaceFolders?.[0];
-  if (!folder) {
+  // 打开多根 .code-workspace 时以 workspace 文件所在目录（DevDesk 需求根）为
+  // DSH 工作区，而不是 folders[0] 的子目录（如 user），避免在子目录重复新建。
+  const folderPath = dshWorkspaceRoot();
+  if (folderPath === undefined) {
     void vscode.window.showWarningMessage("No workspace folder is open.");
     return;
   }
   const client = await clientForAction();
   if (!client) return;
-  const existing = await client.resolveWorkspaceByPath(folder.uri.fsPath);
+  const existing = await client.resolveWorkspaceByPath(folderPath);
   if (existing) {
     void vscode.window.showInformationMessage(`Already registered: "${existing.title}" (${existing.path})`);
   } else {
-    const res = await client.createWorkspace(folder.uri.fsPath);
+    const res = await client.createWorkspace(folderPath);
     void vscode.window.showInformationMessage(
-      `Registered "${folder.uri.fsPath}" as DSH workspace "${res.workspace.title}".`,
+      `Registered "${folderPath}" as DSH workspace "${res.workspace.title}".`,
     );
   }
   provider?.refresh();
@@ -99,6 +131,7 @@ export function activate(extContext: vscode.ExtensionContext): void {
   );
 
   vscode.commands.registerCommand("dshSessions.refresh", () => provider?.refresh());
+  vscode.commands.registerCommand("dshSessions.configureUrl", configureDshUrl);
   vscode.commands.registerCommand("dshSessions.checkConnection", async () => {
     const client = DshClient.fromRaw(baseUrl());
     const ok = await client.ping();
@@ -114,7 +147,7 @@ export function activate(extContext: vscode.ExtensionContext): void {
   vscode.commands.registerCommand("dshSessions.registerWorkspace", registerCurrentWorkspace);
   vscode.commands.registerCommand("dshSessions.newSession", newSession);
   vscode.commands.registerCommand("dshSessions.openInVscode", () => {
-    void webviewProvider?.open(guiUrl());
+    void webviewProvider?.reveal();
   });
   vscode.commands.registerCommand("dshSessions.openInWeb", () => openInBrowser(guiUrl()));
 
@@ -163,13 +196,15 @@ export function activate(extContext: vscode.ExtensionContext): void {
   syncContext();
 
   vscode.workspace.onDidChangeConfiguration((e) => {
-    if (e.affectsConfiguration(`${CFG_SECTION}.${CFG_BASE_URL}`)) provider?.setBaseUrl(baseUrl());
+    if (e.affectsConfiguration(`${CFG_SECTION}.${CFG_BASE_URL}`)) {
+      provider?.setBaseUrl(baseUrl());
+      webviewProvider?.reloadConfiguration();
+    }
     if (e.affectsConfiguration("dshSessions.autoRegister")) provider?.refresh();
   });
 
-  vscode.workspace.onDidChangeWorkspaceFolders((e) => {
-    const folder = e.added[0] ?? vscode.workspace.workspaceFolders?.[0];
-    provider?.setFolderPath(folder?.uri.fsPath);
+  vscode.workspace.onDidChangeWorkspaceFolders(() => {
+    provider?.setFolderPath(dshWorkspaceRoot());
   });
 
   provider.refresh();

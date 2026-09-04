@@ -5,6 +5,7 @@ import {
   DshSessionSummary,
   DshWorkspace,
 } from "./dshClient";
+import { dshWorkspaceRoot } from "./dshFolder";
 
 export type DshTreeItem = WorkspaceRootItem | SessionItem | StatusItem;
 
@@ -97,7 +98,7 @@ export class DshSessionsProvider implements vscode.TreeDataProvider<DshTreeItem>
 
   constructor(baseUrl: string) {
     this.client = DshClient.fromRaw(baseUrl);
-    this.folderPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    this.folderPath = dshWorkspaceRoot();
   }
 
   setBaseUrl(raw: string): void {

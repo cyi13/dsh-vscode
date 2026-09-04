@@ -1,52 +1,64 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
+import { readFile, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { DshClient, DshSessionSummary, DshWorkspace } from "./dshClient";
+import { dshWorkspaceRoot } from "./dshFolder";
 
 const execFileAsync = promisify(execFile);
 
 /**
- * Read a PNG from the system clipboard on macOS via osascript
- * (NSPasteboard -> base64). VS Code's `vscode.env.clipboard` API is
- * text-only, so this is the only way to move clipboard images into the
- * embedded GUI. Returns a data URL, or undefined when the clipboard holds no
- * image (or this is not macOS).
+ * Read a PNG from the macOS pasteboard. osascript writes binary PNG data to a
+ * temporary file; Node reads and base64-encodes it. Returning multi-megabyte
+ * base64 through AppleScript stdout is substantially slower because it crosses
+ * the AppleEvent text bridge and was the main source of screenshot-paste lag.
  */
 async function readClipboardImage(): Promise<string | undefined> {
   if (process.platform !== "darwin") return undefined;
+  const outputPath = join(
+    tmpdir(),
+    `dsh-vscode-paste-${process.pid}-${randomBytes(8).toString("hex")}.png`,
+  );
   try {
-    // macOS screenshots and image copies land on the pasteboard as TIFF
-    // (public.tiff), not PNG, so first try public.png and then convert the
-    // TIFF to PNG with NSBitmapImageRep before base64-encoding it.
     const script = [
       'use framework "Foundation"',
-      "set p to (current application's NSPasteboard's generalPasteboard)",
-      'set pngData to (p\'s dataForType:"public.png")',
-      "if pngData is not missing value then",
-      "  return (pngData's base64EncodedStringWithOptions:0) as text",
-      "end if",
-      'set tiffData to (p\'s dataForType:"public.tiff")',
-      'if tiffData is missing value then return ""',
-      "set rep to (current application's NSBitmapImageRep's imageRepWithData:tiffData)",
-      "if rep is missing value then return \"\"",
-      "set outData to (rep's representationUsingType:(current application's NSPNGFileType) |properties|:(missing value))",
-      "if outData is missing value then return \"\"",
-      "return (outData's base64EncodedStringWithOptions:0) as text",
+      'use framework "AppKit"',
+      "on run argv",
+      "  set outputPath to item 1 of argv",
+      "  set p to (current application's NSPasteboard's generalPasteboard)",
+      '  set pngData to (p\'s dataForType:"public.png")',
+      "  if pngData is missing value then",
+      '    set tiffData to (p\'s dataForType:"public.tiff")',
+      '    if tiffData is missing value then return ""',
+      "    set rep to (current application's NSBitmapImageRep's imageRepWithData:tiffData)",
+      '    if rep is missing value then return ""',
+      "    set pngData to (rep's representationUsingType:(current application's NSPNGFileType) |properties|:(missing value))",
+      "  end if",
+      '  if pngData is missing value then return ""',
+      "  set wroteFile to (pngData's writeToFile:outputPath atomically:true)",
+      '  if (wroteFile as boolean) then return "ok"',
+      '  return ""',
+      "end run",
     ].join("\n");
-    // Each call spawns a fresh osascript process that must load the AppKit
-    // framework; give it generous time on the first cold start.
-    const { stdout, stderr } = await execFileAsync("osascript", ["-e", script], {
-      timeout: 10000,
-      maxBuffer: 8 * 1024 * 1024,
-    });
+    const startedAt = Date.now();
+    const { stdout, stderr } = await execFileAsync(
+      "osascript",
+      ["-e", script, "--", outputPath],
+      { timeout: 10000, maxBuffer: 64 * 1024 },
+    );
     if (stderr !== "") console.error("[dsh] osascript stderr:", stderr);
-    const b64 = stdout.trim();
-    if (b64 === "") return undefined;
-    return `data:image/png;base64,${b64}`;
+    if (stdout.trim() !== "ok") return undefined;
+    const png = await readFile(outputPath);
+    console.log(`[dsh] clipboard image ${png.length} bytes in ${Date.now() - startedAt}ms`);
+    return `data:image/png;base64,${png.toString("base64")}`;
   } catch (err) {
     console.error("[dsh] readClipboardImage failed:", err);
     return undefined;
+  } finally {
+    await unlink(outputPath).catch(() => undefined);
   }
 }
 
@@ -114,13 +126,14 @@ type InMessage =
   // here; the host reads/writes the system clipboard with vscode.env.clipboard
   // and posts the result back into the iframe.
   | { type: "clipboardWrite"; text: string }
-  | { type: "clipboardRead" };
+  | { type: "clipboardRead"; requestId: number };
 
 export class DshWebviewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "dshSessionsWebView";
 
   private view: vscode.WebviewView | undefined;
   private url: string | undefined;
+  private clipboardReadInFlight = false;
 
   /** Called by VS Code when the view is created or recreated. */
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -174,28 +187,42 @@ export class DshWebviewProvider implements vscode.WebviewViewProvider {
         console.log(`[dsh] clipboardWrite ${msg.text.length} chars`);
         break;
       case "clipboardRead": {
-        // Text first — the fast path. VS Code's clipboard API returns text
-        // instantly; only when the clipboard holds no text do we pay for the
-        // slower osascript image read (which spawns a process and loads
-        // AppKit). Otherwise every text paste would wait for osascript too.
-        const text = await vscode.env.clipboard.readText();
-        if (text !== "") {
-          console.log(`[dsh] clipboardRead -> ${text.length} chars`);
-          this.post({ type: "clipboardInject", text });
+        if (this.clipboardReadInFlight) break;
+        this.clipboardReadInFlight = true;
+        try {
+          // Text first — the fast path. VS Code's clipboard API returns text
+          // instantly; only when the clipboard holds no text do we pay for the
+          // slower osascript image read (which spawns a process and loads
+          // AppKit). Otherwise every text paste would wait for osascript too.
+          const text = await vscode.env.clipboard.readText();
+          if (text !== "") {
+            console.log(`[dsh] clipboardRead -> ${text.length} chars`);
+            this.post({ type: "clipboardInject", text, requestId: msg.requestId });
+            break;
+          }
+          // Clipboard is not text: try an image (PNG, or TIFF converted to PNG)
+          // on macOS via osascript (NSPasteboard).
+          const image = await readClipboardImage();
+          if (image !== undefined) {
+            console.log(`[dsh] clipboardRead -> image (${image.length} b64 chars)`);
+            this.post({
+              type: "clipboardInjectImage",
+              dataUrl: image,
+              requestId: msg.requestId,
+            });
+            break;
+          }
+          // Neither text nor image: inject nothing so the GUI stays unchanged.
+          console.log("[dsh] clipboardRead -> empty");
+          this.post({
+            type: "clipboardInject",
+            text: "",
+            requestId: msg.requestId,
+          });
           break;
+        } finally {
+          this.clipboardReadInFlight = false;
         }
-        // Clipboard is not text: try an image (PNG, or TIFF converted to PNG)
-        // on macOS via osascript (NSPasteboard).
-        const image = await readClipboardImage();
-        if (image !== undefined) {
-          console.log(`[dsh] clipboardRead -> image (${image.length} b64 chars)`);
-          this.post({ type: "clipboardInjectImage", dataUrl: image });
-          break;
-        }
-        // Neither text nor image: inject nothing so the GUI stays unchanged.
-        console.log("[dsh] clipboardRead -> empty");
-        this.post({ type: "clipboardInject", text: "" });
-        break;
       }
     }
   }
@@ -204,6 +231,17 @@ export class DshWebviewProvider implements vscode.WebviewViewProvider {
     return vscode.workspace
       .getConfiguration("dshSessions")
       .get<string>("baseUrl", "http://127.0.0.1:3080");
+  }
+
+  private static browserUrls(): { baseUrl: string; authenticationUrl?: string } {
+    let raw = DshWebviewProvider.baseUrl().trim();
+    if (!/^https?:\/\//i.test(raw)) raw = `http://${raw}`;
+    const parsed = new URL(raw);
+    const authenticationUrl = parsed.searchParams.has("token") ? parsed.href : undefined;
+    parsed.search = "";
+    parsed.hash = "";
+    parsed.pathname = "/";
+    return { baseUrl: parsed.href, authenticationUrl };
   }
 
   private static autoRegister(): boolean {
@@ -232,7 +270,7 @@ export class DshWebviewProvider implements vscode.WebviewViewProvider {
   /** Fetch the current workspace's session rows from the DSH API. */
   private async loadListData(): Promise<ListInitData> {
     const baseUrl = DshWebviewProvider.baseUrl();
-    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const folder = dshWorkspaceRoot();
     const client = DshClient.fromRaw(baseUrl);
     if (folder === undefined) {
       return { status: "noFolder", baseUrl, sessions: [] };
@@ -289,9 +327,9 @@ export class DshWebviewProvider implements vscode.WebviewViewProvider {
   }
 
   private guiUrl(sessionId?: string): string {
-    const baseUrl = DshWebviewProvider.baseUrl().replace(/\/+$/, "");
-    if (sessionId === undefined) return baseUrl;
-    return `${baseUrl}/?session=${encodeURIComponent(sessionId)}`;
+    const url = new URL(DshWebviewProvider.browserUrls().baseUrl);
+    if (sessionId !== undefined) url.searchParams.set("session", sessionId);
+    return url.href;
   }
 
   private async navigateToSession(sessionId: string): Promise<void> {
@@ -302,7 +340,7 @@ export class DshWebviewProvider implements vscode.WebviewViewProvider {
 
   private async createAndNavigate(): Promise<void> {
     const client = DshClient.fromRaw(DshWebviewProvider.baseUrl());
-    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const folder = dshWorkspaceRoot();
     if (folder === undefined) return;
     let workspace = await client.resolveWorkspaceByPath(folder);
     if (workspace === undefined) {
@@ -313,7 +351,7 @@ export class DshWebviewProvider implements vscode.WebviewViewProvider {
   }
 
   private async registerFolder(): Promise<void> {
-    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const folder = dshWorkspaceRoot();
     if (folder === undefined) return;
     const client = DshClient.fromRaw(DshWebviewProvider.baseUrl());
     await client.createWorkspace(folder);
@@ -333,6 +371,21 @@ export class DshWebviewProvider implements vscode.WebviewViewProvider {
     }
     // View container not opened yet: open it (resolveWebviewView posts the url).
     await vscode.commands.executeCommand("workbench.view.extension.dshSessionsWeb");
+  }
+
+  /** Reveal the right-side panel without resetting its current session. */
+  async reveal(): Promise<void> {
+    if (this.view !== undefined) {
+      this.view.show?.(true);
+      return;
+    }
+    await vscode.commands.executeCommand("workbench.view.extension.dshSessionsWeb");
+  }
+
+  /** Rebuild the panel after URL/authentication configuration changes. */
+  reloadConfiguration(): void {
+    this.url = undefined;
+    this.render();
   }
 
   /** Open a session by id (used by the sidebar tree). */
@@ -401,14 +454,15 @@ export class DshWebviewProvider implements vscode.WebviewViewProvider {
 
   private render(): void {
     if (this.view === undefined) return;
-    const base = DshWebviewProvider.baseUrl().replace(/\/+$/, "");
-    // Preload the GUI (already-open session if any, else the GUI root) in the
-    // background so the first click into a session reuses warm caches.
-    const preloadUrl = this.url ?? base;
+    const urls = DshWebviewProvider.browserUrls();
+    // Authenticate the iframe first when the configured URL contains the
+    // one-time dsh web launch token, then continue to the clean target URL.
+    const preloadUrl = this.url ?? urls.baseUrl;
     this.view.webview.html = htmlForPanel(
       preloadUrl,
-      base,
+      urls.baseUrl,
       DshWebviewProvider.zoomScale(),
+      urls.authenticationUrl,
     );
   }
 }
@@ -424,6 +478,7 @@ function htmlForPanel(
   preloadUrl: string,
   baseUrl: string,
   zoomScale: number,
+  authenticationUrl?: string,
 ): string {
   // frame-src is kept open to http(s) origins; the host only ever posts the
   // configured base URL, and the iframe src is only ever set from that base.
@@ -471,11 +526,29 @@ function htmlForPanel(
   /* ── gui layer ── */
   #stage{display:none;flex-direction:column;width:100%;height:100%;}
   #stage.on{display:flex;}
-  #guiBar{flex:none;display:flex;align-items:center;gap:2px;justify-content:flex-end;padding:2px 6px;
+  #guiBar{flex:none;height:36px;display:flex;align-items:center;gap:6px;padding:4px 8px;
        background:var(--vscode-editor-background,#1e1e1e);
-       border-bottom:1px solid var(--vscode-panel-border,#3c3c3c);}
-  #zoomLabel{min-width:38px;text-align:center;font-size:11px;
-             color:var(--vscode-descriptionForeground,#bbb);user-select:none;}
+       border-bottom:1px solid var(--vscode-panel-border,#3c3c3c);
+       box-shadow:0 1px 0 rgba(0,0,0,.12);}
+  #guiBar .spacer{flex:1;}
+  .toolBtn{width:28px;height:28px;padding:0;display:grid;place-items:center;border-radius:7px;
+       color:var(--vscode-icon-foreground,var(--vscode-descriptionForeground,#bbb));}
+  .toolBtn:hover{background:var(--vscode-toolbar-hoverBackground,#2a2d2e);
+       color:var(--vscode-foreground,#fff);}
+  .toolBtn:active{transform:translateY(1px);}
+  .toolBtn:focus-visible{outline:1px solid var(--vscode-focusBorder,#007fd4);outline-offset:1px;}
+  .toolBtn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;
+       stroke-linecap:round;stroke-linejoin:round;}
+  #backBtn{margin-right:2px;}
+  #zoomGroup{height:28px;display:flex;align-items:center;padding:0 2px;border-radius:8px;
+       border:1px solid var(--vscode-widget-border,var(--vscode-panel-border,#3c3c3c));
+       background:var(--vscode-input-background,rgba(255,255,255,.04));}
+  #zoomGroup button{width:25px;height:24px;padding:0;display:grid;place-items:center;border-radius:6px;
+       font-size:15px;color:var(--vscode-descriptionForeground,#bbb);}
+  #zoomGroup button:hover{background:var(--vscode-toolbar-hoverBackground,#2a2d2e);
+       color:var(--vscode-foreground,#fff);}
+  #zoomLabel{min-width:40px;text-align:center;font-size:11px;font-variant-numeric:tabular-nums;
+       color:var(--vscode-foreground,#ccc);user-select:none;}
   #frameHost{flex:1;position:relative;overflow:hidden;}
   /* Both wrapper and iframe need an explicit base size. Absolutely positioned
      children do not size their parent; without these dimensions frameZoom
@@ -521,12 +594,18 @@ function htmlForPanel(
   </div>
   <div id="stage">
     <div id="guiBar">
-      <button id="backBtn" title="返回会话列表">&#8592;</button>
-      <span style="flex:1"></span>
-      <button id="zoomOut" title="缩小">&#8722;</button>
-      <span id="zoomLabel">100%</span>
-      <button id="zoomIn" title="放大">&#43;</button>
-      <button id="reload" title="重新加载">&#8635;</button>
+      <button id="backBtn" class="toolBtn" title="返回会话列表" aria-label="返回会话列表">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <span class="spacer"></span>
+      <div id="zoomGroup" aria-label="页面缩放">
+        <button id="zoomOut" title="缩小" aria-label="缩小">&#8722;</button>
+        <span id="zoomLabel">100%</span>
+        <button id="zoomIn" title="放大" aria-label="放大">&#43;</button>
+      </div>
+      <button id="reload" class="toolBtn" title="重新加载" aria-label="重新加载">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 10-2.34 5.66"/><path d="M20 4v7h-7"/></svg>
+      </button>
     </div>
     <div id="frameHost">
       <div id="frameZoom">
@@ -556,6 +635,8 @@ function htmlForPanel(
       // Warm the iframe in the background (not visible) so the first click
       // into a session reuses cached resources.
       var PRELOAD_URL = ${JSON.stringify(preloadUrl)};
+      var AUTHENTICATION_URL = ${JSON.stringify(authenticationUrl ?? "")};
+      var authenticationTarget = AUTHENTICATION_URL ? PRELOAD_URL : '';
 
       function esc(s) {
         return String(s).replace(/[&<>"']/g, function (c) {
@@ -665,7 +746,9 @@ function htmlForPanel(
               source: 'dsh-vscode-bridge-host',
               type: 'setClearZoom',
               scale: s,
-              requestId: requestId
+              requestId: requestId,
+              editorBackground: getComputedStyle(document.documentElement)
+                .getPropertyValue('--vscode-editor-background').trim() || '#1e1e1e'
             },
             '*'
           );
@@ -725,6 +808,13 @@ function htmlForPanel(
       }
 
       frame.addEventListener('load', function () {
+        if (authenticationTarget) {
+          var target = authenticationTarget;
+          authenticationTarget = '';
+          frame.src = target;
+          frame.setAttribute('data-loaded', target);
+          return;
+        }
         // Once the GUI's HTML/JS is in, its own dark boot screen covers the
         // iframe, so drop the overlay quickly.
         if (loadTimer) clearTimeout(loadTimer);
@@ -735,8 +825,9 @@ function htmlForPanel(
 
       // Background preload: warm the DSH GUI without showing it.
       if (PRELOAD_URL) {
-        frame.src = PRELOAD_URL;
-        frame.setAttribute('data-loaded', PRELOAD_URL);
+        var initialUrl = AUTHENTICATION_URL || PRELOAD_URL;
+        frame.src = initialUrl;
+        frame.setAttribute('data-loaded', initialUrl);
       }
 
       document.getElementById('backBtn').addEventListener('click', function () {
@@ -787,9 +878,9 @@ function htmlForPanel(
           } else if (msg.type === 'write' && typeof msg.text === 'string') {
             console.log('[dsh-panel] copy -> host', msg.text.length + ' chars');
             vscode.postMessage({ type: 'clipboardWrite', text: msg.text });
-          } else if (msg.type === 'read') {
-            console.log('[dsh-panel] paste <- host (read)');
-            vscode.postMessage({ type: 'clipboardRead' });
+          } else if (msg.type === 'read' && typeof msg.requestId === 'number') {
+            console.log('[dsh-panel] paste <- host (read #' + msg.requestId + ')');
+            vscode.postMessage({ type: 'clipboardRead', requestId: msg.requestId });
           }
           return;
         }
@@ -800,7 +891,12 @@ function htmlForPanel(
           console.log('[dsh-panel] host -> iframe inject', msg.text.length + ' chars');
           if (frame.contentWindow) {
             frame.contentWindow.postMessage(
-              { source: 'dsh-vscode-bridge-host', type: 'inject', text: msg.text },
+              {
+                source: 'dsh-vscode-bridge-host',
+                type: 'inject',
+                text: msg.text,
+                requestId: msg.requestId
+              },
               '*'
             );
           }
@@ -808,7 +904,12 @@ function htmlForPanel(
           console.log('[dsh-panel] host -> iframe inject image', msg.dataUrl.length + ' chars');
           if (frame.contentWindow) {
             frame.contentWindow.postMessage(
-              { source: 'dsh-vscode-bridge-host', type: 'injectImage', dataUrl: msg.dataUrl },
+              {
+                source: 'dsh-vscode-bridge-host',
+                type: 'injectImage',
+                dataUrl: msg.dataUrl,
+                requestId: msg.requestId
+              },
               '*'
             );
           }
