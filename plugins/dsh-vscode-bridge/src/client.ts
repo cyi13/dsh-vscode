@@ -35,13 +35,18 @@ interface HostMessage {
   dataUrl?: string;
   scale?: number;
   requestId?: number;
+  editorBackground?: string;
 }
 
 /** Messages this plugin posts up to the embedding webview document. */
 type BridgeMessage =
   | { source: "dsh-vscode-bridge"; type: "ready" }
   | { source: "dsh-vscode-bridge"; type: "write"; text: string }
-  | { source: "dsh-vscode-bridge"; type: "read" }
+  | {
+      source: "dsh-vscode-bridge";
+      type: "read";
+      requestId: number;
+    }
   | {
       source: "dsh-vscode-bridge";
       type: "clearZoomApplied";
@@ -51,6 +56,12 @@ type BridgeMessage =
 
 const BRIDGE_SOURCE = "dsh-vscode-bridge";
 const HOST_SOURCE = "dsh-vscode-bridge-host";
+const INSTALL_MARKER = "__dshVscodeBridgeInstalled";
+
+type BridgeWindow = Window & {
+  [INSTALL_MARKER]?: boolean;
+  __dshVscodeLatestPasteRequestId?: number;
+};
 // A single copy/paste gesture can reach several event paths (keydown, DOM
 // copy/paste, VS Code's synthesized events). 800ms comfortably covers them
 // without merging separate deliberate actions.
@@ -62,6 +73,7 @@ let pasteTarget: Element | null = null;
 /** Dedupe: several event paths (paste event + keydown) can fire per gesture. */
 let lastReadAt = 0;
 let lastWriteAt = 0;
+let pasteRequestId = 0;
 
 function isEmbedded(): boolean {
   try {
@@ -119,7 +131,12 @@ function requestRead(): void {
   if (now - lastReadAt < DEDUPE_MS) return;
   lastReadAt = now;
   pasteTarget = document.activeElement;
-  postToHost({ source: BRIDGE_SOURCE, type: "read" });
+  pasteRequestId += 1;
+  postToHost({
+    source: BRIDGE_SOURCE,
+    type: "read",
+    requestId: pasteRequestId,
+  });
 }
 
 /** Send copied text to the host (deduped across event paths). */
@@ -275,7 +292,9 @@ function cutSelectedText(): void {
   }
 }
 
-let clearZoomState: { scale: number; requestId: number } | undefined;
+let clearZoomState:
+  | { scale: number; requestId: number; editorBackground?: string }
+  | undefined;
 let clearZoomObserver: MutationObserver | undefined;
 
 function mountClearZoom(): void {
@@ -301,6 +320,14 @@ function mountClearZoom(): void {
   surface.style.setProperty("zoom", String(state.scale));
   surface.style.width = inversePercent;
   surface.style.height = inversePercent;
+  if (
+    state.editorBackground !== undefined &&
+    CSS.supports("color", state.editorBackground)
+  ) {
+    root.style.background = state.editorBackground;
+    surface.style.setProperty("--dsw-alias-bg-base", state.editorBackground);
+    surface.style.setProperty("--dsw-specific-sidebar-fill", state.editorBackground);
+  }
 
   postToHost({
     source: BRIDGE_SOURCE,
@@ -310,9 +337,13 @@ function mountClearZoom(): void {
   });
 }
 
-function applyClearZoom(scale: number, requestId: number): void {
+function applyClearZoom(
+  scale: number,
+  requestId: number,
+  editorBackground?: string,
+): void {
   if (!Number.isFinite(scale) || scale < 0.5 || scale > 2) return;
-  clearZoomState = { scale, requestId };
+  clearZoomState = { scale, requestId, editorBackground };
   const root = document.getElementById("root");
   if (root !== null && clearZoomObserver === undefined) {
     clearZoomObserver = new MutationObserver(mountClearZoom);
@@ -321,20 +352,41 @@ function applyClearZoom(scale: number, requestId: number): void {
   mountClearZoom();
 }
 
+function acceptPasteResponse(requestId: unknown): boolean {
+  if (typeof requestId !== "number" || !Number.isSafeInteger(requestId)) return false;
+  const bridgeWindow = window as BridgeWindow;
+  const latest = bridgeWindow.__dshVscodeLatestPasteRequestId ?? 0;
+  if (requestId <= latest) return false;
+  bridgeWindow.__dshVscodeLatestPasteRequestId = requestId;
+  return true;
+}
+
 function handleHostMessage(event: MessageEvent): void {
   const msg = event.data as HostMessage | null;
   if (msg === null || typeof msg !== "object") return;
   if (msg.source !== HOST_SOURCE) return;
-  if (msg.type === "inject" && typeof msg.text === "string") {
+  if (
+    msg.type === "inject" &&
+    typeof msg.text === "string" &&
+    acceptPasteResponse(msg.requestId)
+  ) {
     injectText(msg.text);
-  } else if (msg.type === "injectImage" && typeof msg.dataUrl === "string") {
+  } else if (
+    msg.type === "injectImage" &&
+    typeof msg.dataUrl === "string" &&
+    acceptPasteResponse(msg.requestId)
+  ) {
     injectImage(msg.dataUrl);
   } else if (
     msg.type === "setClearZoom" &&
     typeof msg.scale === "number" &&
     typeof msg.requestId === "number"
   ) {
-    applyClearZoom(msg.scale, msg.requestId);
+    applyClearZoom(
+      msg.scale,
+      msg.requestId,
+      typeof msg.editorBackground === "string" ? msg.editorBackground : undefined,
+    );
   }
 }
 
@@ -349,12 +401,20 @@ function injectImage(dataUrl: string): void {
   try {
     const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.*)$/.exec(dataUrl);
     if (match === null) return;
-    const bytes = Uint8Array.from(atob(match[2]), (c) => c.charCodeAt(0));
+    const startedAt = performance.now();
+    const binary = atob(match[2]);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
     const file = new File([bytes], "pasted-image", { type: match[1] });
     const dt = new DataTransfer();
     dt.items.add(file);
     document.dispatchEvent(
       new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }),
+    );
+    console.log(
+      `[dsh-vscode-bridge] image decoded in ${Math.round(performance.now() - startedAt)}ms`,
     );
   } catch (error) {
     console.error("[dsh-vscode-bridge] injectImage failed:", error);
@@ -388,6 +448,12 @@ function patchNavigatorClipboard(): void {
 export function apply(ctx: unknown): void {
   void ctx;
   if (!isEmbedded()) return;
+  const bridgeWindow = window as BridgeWindow;
+  if (bridgeWindow[INSTALL_MARKER] === true) {
+    postToHost({ source: BRIDGE_SOURCE, type: "ready" });
+    return;
+  }
+  bridgeWindow[INSTALL_MARKER] = true;
 
   patchNavigatorClipboard();
   document.addEventListener("keydown", handleKeyDown, true);

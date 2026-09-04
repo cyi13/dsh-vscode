@@ -1,5 +1,10 @@
 # Mount the uniquely named VS Code bridge so client-modules serves its browser
 # bundle without colliding with the unrelated dsh-clipboard tool package.
+#
+# The local-only auth bypass no longer needs a profile config overlay: the host
+# plugin wraps browserAuth.isAuthenticated at runtime (see src/index.ts),
+# admitting loopback Host authorities without a cookie while leaving the
+# Host/Origin fence and LAN/public auth untouched.
 - insert:
     - id: dsh-vscode-bridge
       name: dsh-vscode-bridge
